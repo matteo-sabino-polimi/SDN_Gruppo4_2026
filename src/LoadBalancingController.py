@@ -8,22 +8,33 @@ from ryu.lib.packet import packet, ethernet, ether_types, arp
 from ryu.lib import hub
 import networkx as nx
 
+# Si richiede l'uso del topology discovery: ryu-manager --observe-links
+
 class HopByHopMonitoringSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(HopByHopMonitoringSwitch, self).__init__(*args, **kwargs)
-        # TODO: trova il modo di spostare fuori net (e, eventualmente, di aggiungere i costi).
+        # Supponiamo, per semplicità, che la topologia sia fissa e non cadano collegamenti nella rete...
+
+        # Inizializza il grafo diretto dei link.
+        net = nx.DiGraph()
+        # Popola il grafo e inizializza a zero il costo di ogni link (valutato in Byte/s)
+        for link in get_all_link(self):
+            net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no, weight=0)
+
+        # TODO: come teniamo il conto della differenza tra i costi totali e parziali?
+
         # Genera il thread che esegue self._monitor.
         self.monitor_thread = hub.spawn(self._monitor)
 
     def _monitor(self):
-        # Ogni 10s...
+        # Ogni 5s...
         while True:
             # ...per ogni switch della topologia lancia self._request_stats.
             for datapath in self.datapaths.values():
                 self._request_stats(datapath)
-            hub.sleep(10)
+            hub.sleep(5)
 
     def _request_stats(self, datapath):
         # Manda le richieste del framework di Ryu.
@@ -59,18 +70,8 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
         return (None, None)
 
     def find_next_hop_to_destination(self, source_id, destination_id):
-        # TODO: trova il modo di spostare fuori net (e, eventualmente, di aggiungere i costi).
-        net = nx.DiGraph()
-        for link in get_all_link(self):
-            net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
-
-        path = nx.shortest_path(
-            net,
-            source_id,
-            destination_id
-        )
-
-        first_link = net[path[0]][path[1]]
+        path = nx.dijkstra_path(self.net, source_id, destination_id)
+        first_link = self.net[path[0]][path[1]]
 
         return first_link['port']
 
@@ -112,8 +113,6 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
         else:
             output_port = self.find_next_hop_to_destination(datapath.id,dst_dpid)
 
-        # TODO: controlla che l'ordine sia corretto (non sei sicuro).
-
         # Inoltra il pacchetto.
         actions = [parser.OFPActionOutput(output_port)]
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port, actions=actions, data=msg.data)
@@ -123,14 +122,14 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
         match = parser.OFPMatch(eth_dst=destination_mac)
         actions = [parser.OFPActionOutput(output_port)]
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        mod = parser.OFPFlowMod(datapath=datapath, priority=10, match=match, instructions=inst, buffer_id=msg.buffer_id)
+        mod = parser.OFPFlowMod(datapath=datapath, priority=10, match=match, idle_timeout=20 , instructions=inst, buffer_id=msg.buffer_id)
         datapath.send_msg(mod)
 
         return
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
-        # TODO: trova il modo di aggiornare i costi.
+        # TODO: quali stats vogliamo utilizzare?
         body = ev.msg.body
         self.logger.info('datapath         '
                          'match        '
@@ -143,10 +142,12 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
                              ev.msg.datapath.id,
                              stat.match,
                              stat.instructions[0].actions[0].port, stat.packet_count, stat.byte_count)
+            # TODO: torvare un modo per estrarre "dst.datapathid" e aggiornare i pesi.
+            self.net.add_edge(ev.msg.datapath.id, port=stat.port_no, )
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
-        # TODO: trova il modo di aggiornare i costi.
+        # TODO: quali stats vogliamo utilizzare?
         body = ev.msg.body
         self.logger.info('datapath port '
                          'rx-pkts rx-bytes rx-error '
