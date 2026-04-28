@@ -1,5 +1,7 @@
-# Possible topology in mininet (--arp if arp proxy not implemented)
-# sudo mn --arp --mac torus,3,3 --controller-remote
+# Possible topology in mininet 
+#   --arp not required, ARP PROXY INSTALLED
+#   --mac to use incremental values for the mac addesses
+# sudo mn --mac torus,3,3 --controller-remote
 
 
 # Use the following commands to run the test
@@ -91,6 +93,68 @@ class LoadBalancer(app_manager.RyuApp):
         first_link = net[ path[0] ][ path[1] ]
 
         return first_link['port']
+    
+    # define our own proxy arp
+    def proxy_arp(self, msg):
+        datapath = msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        in_port = msg.match['in_port']
+
+        pkt_in = packet.Packet(msg.data)
+        eth_in = pkt_in.get_protocol(ethernet.ethernet)
+        arp_in = pkt_in.get_protocol(arp.arp)
+
+        # ARP REQUEST messages are the only ones managed by this function and we check so
+        if arp_in.opcode != arp.ARP_REQUEST:
+            return
+
+        destination_host_mac = None
+
+        # treying to find the host that the message is looking for
+        for host in get_all_host(self):
+            if arp_in.dst_ip in host.ipv4:
+                destination_host_mac = host.mac
+                break
+
+        # if host is not found drop the packet
+        if destination_host_mac is None:
+            return
+
+        assert destination_host_mac is not None
+
+        # if the host is found an ARP REPLY is sent back
+        pkt_out = packet.Packet()
+
+        eth_out = ethernet.ethernet(
+            dst = eth_in.src,
+            src = destination_host_mac,
+            ethertype = ether_types.ETH_TYPE_ARP
+        )
+
+        arp_out = arp.arp(
+            opcode  = arp.ARP_REPLY,
+            src_mac = destination_host_mac,
+            src_ip  = arp_in.dst_ip,
+            dst_mac = arp_in.src_mac,
+            dst_ip  = arp_in.src_ip
+        )
+
+        pkt_out.add_protocol(eth_out)
+        pkt_out.add_protocol(arp_out)
+        pkt_out.serialize()
+
+        # the ARP REPLY is sent back
+        out = parser.OFPPacketOut(
+            datapath=datapath,
+            buffer_id=ofproto.OFP_NO_BUFFER,
+            in_port=ofproto.OFPP_CONTROLLER,
+            actions=[parser.OFPActionOutput(in_port)],
+            data=pkt_out.data
+        )
+
+        datapath.send_msg(out)
+        return
 
 
     # packet in management
@@ -105,6 +169,11 @@ class LoadBalancer(app_manager.RyuApp):
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
+
+        # if an ARP packet is sent it is managed with the proxy arp
+        if eth.ethertype == ether_types.ETH_TYPE_ARP:
+            self.proxy_arp(msg)
+            return
 
         # ignore all non IPv4 packets (es. ARP, LLDP)
         if eth.ethertype != ether_types.ETH_TYPE_IP:
