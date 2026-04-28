@@ -49,6 +49,14 @@ class LoadBalancer(app_manager.RyuApp):
         # thread that periodically monitor the links
         self.monitor_thread = hub.spawn(self._monitor)
         
+    @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
+    def _state_change_handler(self, ev):
+        datapath = ev.datapath
+        if ev.state == MAIN_DISPATCHER:
+            self.datapaths[datapath.id] = datapath
+        elif ev.state == DEAD_DISPATCHER:
+            self.datapaths.pop(datapath.id, None)
+
     # event that is executed when a new switch connects in the network
     @set_ev_cls(ofp_event.EventSwitchEnter)
     def build_topology(self, ev):
@@ -59,7 +67,7 @@ class LoadBalancer(app_manager.RyuApp):
         for switch in get_all_switch(self):
             self.graph.add_node(switch.dp.id)
             
-        for link in get_all_links(self):
+        for link in get_all_link(self):
             self.graph.add_edge(
                 link.src.dpid,
                 link.dst.dpid,
@@ -132,7 +140,9 @@ class LoadBalancer(app_manager.RyuApp):
     def find_next_hop_to_destination(self,source_id,destination_id):
         net = self.graph
         for link in get_all_link(self):
-            net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+            if not net.has_edge(link.src.dpid, link.dst.dpid):
+                net.add_edge(link.src.dpid, link.dst.dpid,
+                         port=link.src.port_no, weight=1)
 
         path = nx.dijkstra_path(
             net,
@@ -334,18 +344,16 @@ class LoadBalancer(app_manager.RyuApp):
 
             if key in self.port_stats:
                 previous_tx_bytes = self.port_stats[key]
-
                 bytes_diff = current_tx_bytes - previous_tx_bytes
-
                 bandwith_usage = bytes_diff / TIME_INTERVAL
 
-             # link adjourned
-            if dpid in self.graph:
-                for link in self.graph[dpid]:
-                    if self.graph[dpid][link]['port'] == port_no:
-                        self.graph[dpid][link]['weight'] = bandwith_usage
-                        self.logger.info(f"link {dpid} -> {link} (port {port_no} adjourned {bandwith_usage} B/s)")
-                        break
+                 # link adjourned
+                if dpid in self.graph:
+                    for link in self.graph[dpid]:
+                        if self.graph[dpid][link]['port'] == port_no:
+                            self.graph[dpid][link]['weight'] = bandwith_usage
+                            self.logger.info(f"link {dpid} -> {link} (port {port_no} adjourned {bandwith_usage} B/s)")
+                            break
 
             self.port_stats[key] = current_tx_bytes
         return
