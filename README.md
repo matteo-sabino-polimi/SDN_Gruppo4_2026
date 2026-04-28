@@ -12,6 +12,10 @@ Comando per il setup della rete simulata in mininet
     sudo mn --mac torus,3,3 --controller-remote
 
 ```
+In caso di rete custom
+``` bash
+    mn --custom load-balance-topology.py --topo LBTopo
+```
 
 Comando per il setup di flowmanager
 ``` bash
