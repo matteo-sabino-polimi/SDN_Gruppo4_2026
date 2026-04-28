@@ -190,7 +190,7 @@ class LoadBalancer(app_manager.RyuApp):
 
 
     # packet in management
-    @set_ev_cls(ofp_event.EventOFPacketIn, MAIN_DISPATCHER)
+    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # extract the message
         msg = ev.msg
