@@ -5,11 +5,11 @@
 #   --mac to use incremental values for the mac addesses (Optional but usefull)
 # sudo mn --mac torus,3,3 --controller-remote
 
-# sudo mn --mac --custom 
+# sudo mn --mac --custom topo_load_balancer.py --topo LBTopo --controller remote
 
 
 # Use the following commands to run the test
-# ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
+# ryu-manager --observe-link load_balancer.py flowmanager/flowmanager.py
 
 # localhost:8080/home/index.html to use flowmanager 
 
@@ -30,7 +30,7 @@ import networkx as nx # library for graphs's algorithms
 # to draw the possible network design
 # import matplotlib.pyplot as plt
 
-TIME_INTERVAL = 10 # in second
+TIME_INTERVAL = 10 # in seconds
 
 class LoadBalancer(app_manager.RyuApp):
     OFP_VERSION = [ofproto_v1_3.OFP_VERSION] # version we want to manage
@@ -41,6 +41,9 @@ class LoadBalancer(app_manager.RyuApp):
 
          # datapath table
         self.datapaths = {}
+        
+        # arp table ip to mac
+        self.arp_table = {}
 
         # graph of the network
         self.graph = nx.DiGraph()
@@ -143,9 +146,9 @@ class LoadBalancer(app_manager.RyuApp):
 
         destination_host_mac = None
 
-        # treying to find the host that the message is looking for
+        # trying to find the host that the message is looking for
         for host in get_all_host(self):
-            if arp_in.dst_ip in host.ipv4:
+            if host.ipv4 and arp_in.dst_ip in host.ipv4:
                 destination_host_mac = host.mac
                 break
 
@@ -192,6 +195,8 @@ class LoadBalancer(app_manager.RyuApp):
     # packet in management
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
+        
+        
         # extract the message
         msg = ev.msg
         datapath = msg.datapath # id of thw switch
@@ -201,9 +206,11 @@ class LoadBalancer(app_manager.RyuApp):
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
+        arp_pkt = pkt.get_protocol(arp.arp)
 
         # if an ARP packet is sent it is managed with the proxy arp
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
+            self.arp_table[arp_pkt.src_ip] = arp_pkt.src_mac
             self.proxy_arp(msg)
             return
 
