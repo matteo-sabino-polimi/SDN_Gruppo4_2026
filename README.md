@@ -14,17 +14,17 @@ Comando per il setup della rete simulata in mininet
 ```
 In caso di rete custom
 ``` bash
-    mn --custom load-balance-topology.py --topo LBTopo
+    mn --custom load_balancer_topo.py --topo LBTopo
 ```
 
 Comando per il setup di flowmanager
 ``` bash
-    ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
+    ryu-manager --observe-link load_balancer.py flowmanager/flowmanager.py
 ```
 
 Comando per il monitoring tramite interfaccia grafica
 ``` bash
-    localhost:8080/home/index.html
+    http://localhost:8080/home/index.html
 ```
 
 
