@@ -16,7 +16,7 @@ from ryu.lib import hub
 from ryu.base import app_manager
 from ryu.ofproto import ofproto_V1_3
 from ryu.topology import event, switches
-from ryu.topology.api import get_all_switch, get_all_link, get_all_host
+from ryu.topology.api import get_all_switch, get_all_link, get_all_host # import to know the topology of the network
 from ryu.lib.packet import packet, ethernet, ether_types
 import networkx as nx # library for graphs's algorithms
 
@@ -30,7 +30,7 @@ class LoadBalancer(app_manager.RyuApp):
         super(PsrSwitch, self).__init__(*args, **kwargs)
         self.mac_to_port = {} # empty dictionary
 
-    # send all packages to controller if no rule is found
+    # basic rule is to send all packages to controller if no rule is found
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures) # we want to intercept the event SwitchFeatures, it is used to install the rules at the startup of the switch
     def switch_features_handler(self, ev): # ev are the parameters of the packet
         datapath = ev.msg.datapath # datapath is the id of the switch
@@ -66,3 +66,104 @@ class LoadBalancer(app_manager.RyuApp):
 
         # sent to the switch the mod
         datapath.send_msg(mod)
+
+    ### AUXILLARY FUNCTIONS ###
+
+    # find destination switch and switch port
+    def find_destination_switch(self,destination_mac):
+        for host in get_all_host(self):
+            if host.mac == destination_mac:
+                return (host.port.dpid, host.port.port_no)
+        return (None,None)
+
+    # find the next switch to which the package has to be sent
+    def find_next_hop_to_destination(self,source_id,destination_id):
+        net = nx.DiGraph()
+        for link in get_all_link(self):
+            net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
+
+        path = nx.shortest_path(
+            net,
+            source_id,
+            destination_id
+        )
+
+        first_link = net[ path[0] ][ path[1] ]
+
+        return first_link['port']
+
+
+    # packet in management
+    @set_ev_class(ofp_event.EventOFPacketIn, MAIN_DISPATCHER)
+    def _packet_in_handler(self, ev):
+        # extract the message
+        msg = ev.msg
+        datapath = msg.datapath # id of thw switch
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        in_port = msg.match['in_port'] # in port from which the package arrived
+
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocol(ethernet.ethernet)
+
+        # ignore all non IPv4 packets (es. ARP, LLDP)
+        if eth.ethertype != ether_types.ETH_TYPE_IP:
+            return
+        
+        destination_mac = eth.dst
+
+        # find destination switch
+        (dst_dpid, dst_port) = self.find_destination_switch(destination_mac)
+
+        # host not found
+        if dst_dpid is None:
+            # print "DP: ", datapath.id, "Host not found: ", pkt_ip.dst
+            return
+
+        if dst_dpid == datapath.id:
+            # used if host is directly connected
+            output_port = dst_port    
+        else:
+            # used if host is not directly connected
+            output_port = self.find_next_hop_to_destination(datapath.id,dst_dpid)
+
+        # 1. the received packet is sent to correct port (I send it manually because if it arrives before the installation of the rule it is sent back to me)
+        
+        actions = [parser.OFPactionOutput(output_port)]
+
+        out = parser.OFPacketOut(
+            datapath=datapath,
+            buffer_id=msg.buffer_id,
+            in_port=in_port,
+            actions=actions,
+            data=msg.data
+        )
+
+        datapath.send_msg(out)
+
+        # add rule for the next packets
+        
+        match = parser.OFPMatch(
+            eth_dst=destination_mac
+            )
+        
+        inst = [
+            parser.OFPInstructionActions(
+                ofproto.OFPIT_APPLY_ACTIONS,
+                actions
+            )
+        ]
+        
+        mod = parser.OFPFlowMod(
+            datapath=datapath,
+            priority=10,
+            match=match,
+            instructions=inst
+            )
+        
+        # send the rule to the switch
+        datapath.send_msg(mod)
+
+        return
+
+
