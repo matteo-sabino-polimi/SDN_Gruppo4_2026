@@ -7,13 +7,17 @@ collegamenti scarichi
 - Carichi sullo switch una regola per l'instradamento senza più passare dal controllore.
 
 ## Comandi per il setup
-
+Comando per il setup della rete simulata in mininet
 ``` bash
     sudo mn --mac torus,3,3 --controller-remote
-    ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
 ```
-Per il monitoring
 
+Comando per il setup di flowmanager
+``` bash
+ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
+```
+
+Comando per il monitoring tramite interfaccia grafica
 ``` bash
     localhost:8080/home/index.html
 ```
