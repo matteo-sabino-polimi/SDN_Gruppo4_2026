@@ -23,7 +23,9 @@ from ryu.lib.packet import packet, ethernet, ether_types
 import networkx as nx # library for graphs's algorithms
 
 # to draw the possible network design
-import matplotlib.pyplto as plt 
+import matplotlib.pyplto as plt
+
+TIME_INTERVAL = 10 # in second
 
 class LoadBalancer(app_manager.RyuApp):
     OFP_VERSION = [ofproto_v1_3.OFP_VERSION] # version we want to manage
@@ -31,6 +33,16 @@ class LoadBalancer(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(PsrSwitch, self).__init__(*args, **kwargs)
         self.mac_to_port = {} # empty dictionary
+
+         # datapath table
+        self.datapaths = {}
+
+        # graph of the network
+        self.graph = nx.DiGraph()
+        self.port_stats = {}
+
+        # thread che lancia periodicamente le richieste
+        self.monitor_thread = hub.spawn(self._monitor)
 
     # basic rule is to send all packages to controller if no rule is found
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures) # we want to intercept the event SwitchFeatures, it is used to install the rules at the startup of the switch
@@ -71,6 +83,12 @@ class LoadBalancer(app_manager.RyuApp):
 
     ### AUXILLARY FUNCTIONS ###
 
+    def _monitor(self):
+        while True:
+            for dp in self.datapaths.values():
+                self._request_stats(dp)
+            hub.sleep(TIME_INTERVAL)
+
     # find destination switch and switch port
     def find_destination_switch(self,destination_mac):
         for host in get_all_host(self):
@@ -80,14 +98,15 @@ class LoadBalancer(app_manager.RyuApp):
 
     # find the next switch to which the package has to be sent
     def find_next_hop_to_destination(self,source_id,destination_id):
-        net = nx.DiGraph()
+        net = self.graph
         for link in get_all_link(self):
             net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no)
 
-        path = nx.shortest_path(
+        path = nx.dijkstra_path(
             net,
             source_id,
-            destination_id
+            destination_id,
+            weight='weight'
         )
 
         first_link = net[ path[0] ][ path[1] ]
@@ -227,6 +246,7 @@ class LoadBalancer(app_manager.RyuApp):
             datapath=datapath,
             priority=10,
             match=match,
+            isdle_timeout = TIME_INTERVAL # interval of stats report
             instructions=inst
             )
         
@@ -235,4 +255,57 @@ class LoadBalancer(app_manager.RyuApp):
 
         return
 
+    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
+    def _flow_stats_reply_handler(self, ev):
+        body = ev.msg.body
+        self.logger.info('datapath         '
+        'match        '
+        'out-port packets bytes')
+        self.logger.info('---------------- '
+        '-------- ----------------- '
+        '-------- -------- --------')        
+        for stat in body:
+            self.logger.info('%016x %26s %8x %8d %8d',
+                ev.msg.datapath.id,
+                stat.match,
+                stat.instructions[0].actions[0].port,
+                stat.packet_count, stat.byte_count)
+        return
+
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def _port_stats_reply_handler(self, ev):
+        
+
+        body = ev.msg.body
+        self.logger.info('datapath port '
+        'rx-pkts rx-bytes rx-error '
+        'tx-pkts tx-bytes tx-error')
+        self.logger.info('---------------- -------- '
+        '-------- -------- -------- '
+        '-------- -------- --------')
+        for stat in body:
+            self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
+                ev.msg.datapath.id, stat.port_no,
+                stat.rx_packets, stat.rx_bytes, stat.rx_errors,
+                stat.tx_packets, stat.tx_bytes, stat.tx_errors)
+            
+            current_tx_bytes = stat.tx_bytes
+            key = (dpid, port_no)
+
+            if key in self.port_stats:
+                previous_tx_bytes = self,port_stats[key]
+
+                bytes_diff = current_tx_bytes - previous_tx_bytes
+
+                bandwith_usage = bytes_diff / TIME_INTERVAL
+
+            if dpid in self.graph:
+                for link in self.graph[dpid]:
+                    if self.graph[dpid][link]['port'] == port_no:
+                        self.graph[dpid][link]['weight'] = bandwith_usage
+                        self.logger.info(f"link {dpid} -> {link} (port {port_no} adjourned {bandwith_usage} B/s)")
+                        break # link adjourned
+
+            self.port_stats[key] = current_tx_bytes
+        return
 
