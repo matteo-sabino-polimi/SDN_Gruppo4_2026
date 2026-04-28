@@ -5,6 +5,8 @@
 #   --mac to use incremental values for the mac addesses (Optional but usefull)
 # sudo mn --mac torus,3,3 --controller-remote
 
+# sudo mn --mac --custom 
+
 
 # Use the following commands to run the test
 # ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
@@ -18,14 +20,15 @@ from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER, CONFIG_DISP
 from ryu.controller.handler import set_ev_cls
 from ryu.lib import hub
 from ryu.base import app_manager
-from ryu.ofproto import ofproto_V1_3
+from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event, switches
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host # import to know the topology of the network
 from ryu.lib.packet import packet, ethernet, ether_types
+from ryu.lib.packet import arp
 import networkx as nx # library for graphs's algorithms
 
 # to draw the possible network design
-import matplotlib.pyplto as plt
+import matplotlib.pyplot as plt
 
 TIME_INTERVAL = 10 # in second
 
@@ -33,7 +36,7 @@ class LoadBalancer(app_manager.RyuApp):
     OFP_VERSION = [ofproto_v1_3.OFP_VERSION] # version we want to manage
 
     def __init__(self, *args, **kwargs):
-        super(PsrSwitch, self).__init__(*args, **kwargs)
+        super(LoadBalancer, self).__init__(*args, **kwargs)
         self.mac_to_port = {} # empty dictionary
 
          # datapath table
@@ -51,7 +54,7 @@ class LoadBalancer(app_manager.RyuApp):
     def switch_features_handler(self, ev): # ev are the parameters of the packet
         datapath = ev.msg.datapath # datapath is the id of the switch
         ofproto = datapath.ofproto # all the functions of of
-        parser = datapath.pfproto_parser # function to create of messages
+        parser = datapath.ofproto_parser # function to create of messages
         self.mac_to_port[datapath.id] = {}
         
         # match all packets if empty
@@ -76,7 +79,7 @@ class LoadBalancer(app_manager.RyuApp):
         mod = parser.OFPFlowMod(
             datapath = datapath,
             priority = 0, # lowest possible priority so that the other rules can be applied
-            math = match,
+            match = match,
             instructions = inst
         )
 
@@ -179,7 +182,7 @@ class LoadBalancer(app_manager.RyuApp):
 
 
     # packet in management
-    @set_ev_class(ofp_event.EventOFPacketIn, MAIN_DISPATCHER)
+    @set_ev_cls(ofp_event.EventOFPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # extract the message
         msg = ev.msg
@@ -219,7 +222,7 @@ class LoadBalancer(app_manager.RyuApp):
 
         # 1. the received packet is sent to correct port (I send it manually because if it arrives before the installation of the rule it is sent back to me)
         
-        actions = [parser.OFPactionOutput(output_port)]
+        actions = [parser.OFPActionOutput(output_port)]
 
         out = parser.OFPacketOut(
             datapath=datapath,
@@ -248,7 +251,7 @@ class LoadBalancer(app_manager.RyuApp):
             datapath=datapath,
             priority=10,
             match=match,
-            isdle_timeout = TIME_INTERVAL # interval of stats report
+            idle_timeout = TIME_INTERVAL # interval of stats report
             instructions=inst
             )
         
@@ -292,10 +295,12 @@ class LoadBalancer(app_manager.RyuApp):
                 stat.tx_packets, stat.tx_bytes, stat.tx_errors)
             
             current_tx_bytes = stat.tx_bytes
+            dpid = ev.msg.datapath.id
+            port_no = stat.port_no
             key = (dpid, port_no)
 
             if key in self.port_stats:
-                previous_tx_bytes = self,port_stats[key]
+                previous_tx_bytes = self.port_stats[key]
 
                 bytes_diff = current_tx_bytes - previous_tx_bytes
 
