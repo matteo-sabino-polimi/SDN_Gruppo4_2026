@@ -16,6 +16,10 @@ In caso di rete custom
 ``` bash
 sudo mn --mac --custom topo_load_balancer.py --topo LBTopo --controller remote
 ```
+Rete custom con link a capacità predefinita [100Mb/s]
+``` bash
+sudo mn --mac --custom topo_load_balancer.py --topo LBTopo --controller remote --link tc,bw=100
+```
 
 Comando per il setup di flowmanager
 ``` bash
