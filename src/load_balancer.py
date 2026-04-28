@@ -208,7 +208,7 @@ class LoadBalancer(app_manager.RyuApp):
             return
 
         # ignore all LLDP packets so that ryu can manage them and populate get_all_links
-        if eth.ethertype == ether_typer.ETH_TYPE_LLDP:
+        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             return
 
         # ignore all non IPv4 packets (es. ARP, LLDP)
@@ -236,7 +236,7 @@ class LoadBalancer(app_manager.RyuApp):
         
         actions = [parser.OFPActionOutput(output_port)]
 
-        out = parser.OFPacketOut(
+        out = parser.OFPPacketOut(
             datapath=datapath,
             buffer_id=msg.buffer_id,
             in_port=in_port,
