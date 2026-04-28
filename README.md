@@ -10,11 +10,12 @@ collegamenti scarichi
 Comando per il setup della rete simulata in mininet
 ``` bash
     sudo mn --mac torus,3,3 --controller-remote
+
 ```
 
 Comando per il setup di flowmanager
 ``` bash
-ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
+    ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
 ```
 
 Comando per il monitoring tramite interfaccia grafica
