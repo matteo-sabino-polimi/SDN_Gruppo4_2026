@@ -1,55 +1,76 @@
+# Topology discovery required: ryu-manager --observe-links
+
 from ryu.base import app_manager
-from ryu.controller import ofp_event
-from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER
+from ryu.controller import ofp_event, event
+from ryu.controller.handler import set_ev_cls, CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.ofproto import ofproto_v1_3
-from ryu.topology import event, switches
-from ryu.topology.api import get_all_switch, get_all_link, get_all_host
+from ryu.topology.api import get_all_link, get_all_host
 from ryu.lib.packet import packet, ethernet, ether_types, arp
 from ryu.lib import hub
 import networkx as nx
 
-# Si richiede l'uso del topology discovery: ryu-manager --observe-links
+MONITORING_TIME = 5 # [s] monitoring_time
+BIT_RATE = 1 # [bps] bit_rate
 
 class HopByHopMonitoringSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(HopByHopMonitoringSwitch, self).__init__(*args, **kwargs)
-        # Supponiamo, per semplicità, che la topologia sia fissa e non cadano collegamenti nella rete...
+        # Suppose, for the sake of simplicity, that we are working with a fixed and immutable topology...
 
-        # Inizializza il grafo diretto dei link.
-        net = nx.DiGraph()
-        # Popola il grafo e inizializza a zero il costo di ogni link (valutato in Byte/s)
+        self.datapaths = {}
+        # Allocate two direct graphs for links and .
+        self.network_graph = nx.DiGraph()
+        self.build_topology()
         for link in get_all_link(self):
-            net.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no, weight=0)
-
-        # TODO: come teniamo il conto della differenza tra i costi totali e parziali?
-
-        # Genera il thread che esegue self._monitor.
+            self.network_graph.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no,
+                                        weight=0, previous_traffic=0)
+        # Generate the thread executing self._monitor.
         self.monitor_thread = hub.spawn(self._monitor)
 
     def _monitor(self):
-        # Ogni 5s...
+        # Every MONITORING_TIME s...
         while True:
-            # ...per ogni switch della topologia lancia self._request_stats.
+            # ...for each switch of topology execute self._request_stats.
             for datapath in self.datapaths.values():
                 self._request_stats(datapath)
-            hub.sleep(5)
+            hub.sleep(MONITORING_TIME)
 
     def _request_stats(self, datapath):
-        # Manda le richieste del framework di Ryu.
+        # Send requests of Ryu framework.
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        # richiesta per le FlowStats
+        # request FlowStats
         req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(req)
-        # richiesta per le PortStats
+        # request PortStats
         req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
         datapath.send_msg(req)
 
+    @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
+    def _state_change_handler(self, ev):
+        datapath = ev.datapath
+        if ev.state == MAIN_DISPATCHER:
+            self.datapaths[datapath.id] = datapath
+        elif ev.state == DEAD_DISPATCHER:
+            self.datapaths.pop(datapath.id, None)
+            self.build_topology()
+
+    # event that is executed when a new switch connects in the network
+    @set_ev_cls(event.EventSwitchEnter)
+    def build_topology(self):
+        # Clear self.network_graph.
+        self.network_graph.clear()
+        # Fill, initialize to zero the weight {((Bytes(t)-Bytes(t0))/MONITORING_TIME)/(BIT_RATE/8)} of every edge
+        # and initialize to zero the previous_traffic {Bytes(t0)}
+        for link in get_all_link(self):
+            self.network_graph.add_edge(link.src.dpid, link.dst.dpid, port=link.src.port_no,
+                                        weight=0, previous_traffic=0)
+
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
-        # Switch CONFIG classico.
+        # Classic switch CONFIG.
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -61,17 +82,17 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
         datapath.send_msg(mod)
 
     def find_destination_switch(self, destination_mac):
-        # Per ogni host della topologia si cerca di matchare il MAC di destinazione.
+        # For each host of topology try to match host.mac and destination_mac.
         for host in get_all_host(self):
-            # Se l' host viene trovato si restituisce l'associazione...
+            # If host is found return tuple...
             if host.mac == destination_mac:
                 return (host.port.dpid, host.port.port_no)
-        # ...altrimenti si restituisce un'associazione vuota.
+        # ...else return None tuple.
         return (None, None)
 
     def find_next_hop_to_destination(self, source_id, destination_id):
-        path = nx.dijkstra_path(self.net, source_id, destination_id)
-        first_link = self.net[path[0]][path[1]]
+        path = nx.dijkstra_path(self.network_graph, source_id, destination_id)
+        first_link = self.network_graph[path[0]][path[1]]
 
         return first_link['port']
 
@@ -86,39 +107,43 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
 
-        # Se il pacchetto è ARP esegui il proxy arp.
+        # If the packet is an ARP packet, execute the proxy arp and ignore it.
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
             self.proxy_arp(msg)
             return
 
-        # Se il pacchetto non è IPv4 (ARP ricade nel caso ma è precedentemente gestito) ignoralo.
+        # If the packet is an LLDP packet, ignore it.
+        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
+            return
+
+        # If the packet isn't IPv4, ignore it.
         if eth.ethertype != ether_types.ETH_TYPE_IP:
             self.logger.info('Non-IPv4 package received: ignored')
             return
 
         destination_mac = eth.dst
 
-        # Cerca lo switch di destinazione...
+        # Find destination switch.
         (dst_dpid, dst_port) = self.find_destination_switch(destination_mac)
 
-        # ...se l'host non è stato trovato, ignora il pacchetto.
+        # If host was not found, ignore the packet...
         if dst_dpid is None or dst_port is None:
             self.logger.info('Unknown host: ignored')
             return
 
-        # ...se l'host è direttamente raggiungibile, la porta di uscita verso l'host è impostata,
+        # ...else, if host is directly connected the output_port is set to dst_port...
         if dst_dpid == datapath.id:
             output_port = dst_port
-        # altrimenti cerca il next hop veso la destinazione.
+        # else find next_hop_to_destination.
         else:
             output_port = self.find_next_hop_to_destination(datapath.id,dst_dpid)
 
-        # Inoltra il pacchetto.
+        # send the package.
         actions = [parser.OFPActionOutput(output_port)]
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id, in_port=in_port, actions=actions, data=msg.data)
         datapath.send_msg(out)
 
-        # Aggiungi la Regola.
+        # Add the new entry.
         match = parser.OFPMatch(eth_dst=destination_mac)
         actions = [parser.OFPActionOutput(output_port)]
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
@@ -127,9 +152,17 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
 
         return
 
+    def get_dst_dpid_by_port_no(self, src_dpid, port_no):
+        # For each neighbor of src_dpid...
+        for dst_dpid, attributes in self.network_graph[src_dpid].items():
+            # ...check if attributes.get('port') matches port_no.
+            if attributes.get('port') == port_no:
+                return dst_dpid
+        # Return None if match wasn't found.
+        return None
+
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
-        # TODO: quali stats vogliamo utilizzare?
         body = ev.msg.body
         self.logger.info('datapath         '
                          'match        '
@@ -142,12 +175,9 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
                              ev.msg.datapath.id,
                              stat.match,
                              stat.instructions[0].actions[0].port, stat.packet_count, stat.byte_count)
-            # TODO: torvare un modo per estrarre "dst.datapathid" e aggiornare i pesi.
-            self.net.add_edge(ev.msg.datapath.id, port=stat.port_no, )
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
-        # TODO: quali stats vogliamo utilizzare?
         body = ev.msg.body
         self.logger.info('datapath port '
                          'rx-pkts rx-bytes rx-error '
@@ -160,10 +190,16 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
                              ev.msg.datapath.id, stat.port_no,
                              stat.rx_packets, stat.rx_bytes, stat.rx_errors,
                              stat.tx_packets, stat.tx_bytes, stat.tx_errors)
+            src_id = stat.ev.msg.datapath.id
+            stat_port = stat.port_no
+            dst_dpid = self.get_dst_dpid_by_port_no(ev.msg.datapath.id, stat_port)
+            if dst_dpid is not None:
+                previous_traffic = self.network_graph[src_id][dst_dpid]['previous_traffic']
+                self.network_graph.add_edge(ev.msg.datapath.id, dst_dpid, port=stat_port,
+                                            weight=(((stat.rx_bytes - previous_traffic)/MONITORING_TIME)/(BIT_RATE/8)),
+                                            previous_traffic=stat.rx_bytes)
 
-    # Rippato dalle soluzioni del lab.
     def proxy_arp(self, msg):
-        # TODO: guardati come funziona.
         datapath = msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -173,21 +209,23 @@ class HopByHopMonitoringSwitch(app_manager.RyuApp):
         eth_in = pkt_in.get_protocol(ethernet.ethernet)
         arp_in = pkt_in.get_protocol(arp.arp)
 
-        # gestiamo solo i pacchetti ARP REQUEST
+        # If the packet isn't ARP_REQUEST ignore it.
         if arp_in.opcode != arp.ARP_REQUEST:
             return
 
         destination_host_mac = None
 
+        # Find destination switch.
         for host in get_all_host(self):
             if arp_in.dst_ip in host.ipv4:
                 destination_host_mac = host.mac
                 break
 
-        # host non trovato
+        # If host was not found, ignore the packet...
         if destination_host_mac is None:
             return
 
+        # ...else manage ARP_REPLY.
         pkt_out = packet.Packet()
         eth_out = ethernet.ethernet(
             dst = eth_in.src,
