@@ -9,24 +9,21 @@ collegamenti scarichi
 ## Comandi per il setup
 Comando per il setup della rete simulata in mininet
 ``` bash
-    sudo mn --mac torus,3,3 --controller-remote
+sudo mn --mac torus,3,3 --controller-remote
 
 ```
 In caso di rete custom
 ``` bash
-    sudo mn --mac --custom topo_load_balancer.py --topo LBTopo --controller remote
+sudo mn --mac --custom topo_load_balancer.py --topo LBTopo --controller remote
 ```
 
 Comando per il setup di flowmanager
 ``` bash
-    ryu-manager --observe-link load_balancer.py flowmanager/flowmanager.py
+ryu-manager --observe-link load_balancer.py flowmanager/flowmanager.py
 ```
 
-Comando per il monitoring tramite interfaccia grafica
-``` bash
-    http://localhost:8080/home/index.html
-```
-
+Link per il monitoring tramite interfaccia grafica
+[http://localhost:8080/home/index.html](http://localhost:8080/home/index.html)
 
 ## Authors
 - Matteo
