@@ -6,6 +6,19 @@ Scrivere un programma Ryu che:
 collegamenti scarichi
 - Carichi sullo switch una regola per l'instradamento senza più passare dal controllore.
 
+## Comandi per il setup
+
+``` bash
+    sudo mn --mac torus,3,3 --controller-remote
+    ryu_flowmanager --observe-link load_balancer.py flowmanager/flowmanager.py
+```
+Per il monitoring
+
+``` bash
+    localhost:8080/home/index.html
+```
+
+
 ## Authors
 - Matteo
 - Pietro
