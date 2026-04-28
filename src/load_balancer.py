@@ -44,9 +44,7 @@ class LoadBalancer(app_manager.RyuApp):
 
         # graph of the network
         self.graph = nx.DiGraph()
-        self.port_stats = {} # 
-        
-        
+        self.port_stats = {} 
 
         # thread that periodically monitor the links
         self.monitor_thread = hub.spawn(self._monitor)
