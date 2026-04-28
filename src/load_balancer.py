@@ -91,9 +91,9 @@ class LoadBalancer(app_manager.RyuApp):
     def _monitor(self):
         while True:
             for dp in self.datapaths.values():
-                self._request_stats(dp)
+                self._request_stats(dp) # for all switches send a request for stats
             hub.sleep(TIME_INTERVAL)
-            
+
     def _request_stats(self, datapath):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
