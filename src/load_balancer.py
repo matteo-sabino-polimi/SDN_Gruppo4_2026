@@ -28,7 +28,7 @@ from ryu.lib.packet import arp
 import networkx as nx # library for graphs's algorithms
 
 # to draw the possible network design
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 
 TIME_INTERVAL = 10 # in second
 
@@ -205,6 +205,10 @@ class LoadBalancer(app_manager.RyuApp):
         # if an ARP packet is sent it is managed with the proxy arp
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
             self.proxy_arp(msg)
+            return
+
+        # ignore all LLDP packets so that ryu can manage them and populate get_all_links
+        if eth.ethertype == ether_typer.ETH_TYPE_LLDP:
             return
 
         # ignore all non IPv4 packets (es. ARP, LLDP)
