@@ -58,7 +58,7 @@ class LoadBalancer(app_manager.RyuApp):
             self.datapaths.pop(datapath.id, None)
 
     # event that is executed when a new switch connects in the network
-    @set_ev_cls(ofp_event.EventSwitchEnter)
+    @set_ev_cls(event.EventSwitchEnter)
     def build_topology(self, ev):
         # graph cleared each time
         self.graph.clear()
