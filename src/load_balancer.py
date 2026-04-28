@@ -48,8 +48,27 @@ class LoadBalancer(app_manager.RyuApp):
         
         
 
-        # thread che lancia periodicamente le richieste
+        # thread that periodically monitor the links
         self.monitor_thread = hub.spawn(self._monitor)
+        
+    # event that is executed when a new switch connects in the network
+    @set_ev_cls(ofp_event.EventSwitchEnter)
+    def build_topology(self, ev):
+        # graph cleared each time
+        self.graph.clear()
+        
+        # add all known switches to the graph
+        for switch in get_all_switch(self):
+            self.graph.add_node(switch.dp.id)
+            
+        for link in get_all_links(self):
+            self.graph.add_edge(
+                link.src.dpid,
+                link.dst.dpid,
+                port = link.src.port_no,
+                weight = 1 # set starting weight for all edges
+            )
+            
 
     # basic rule is to send all packages to controller if no rule is found
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures) # we want to intercept the event SwitchFeatures, it is used to install the rules at the startup of the switch
