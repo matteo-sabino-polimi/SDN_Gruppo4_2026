@@ -44,7 +44,9 @@ class LoadBalancer(app_manager.RyuApp):
 
         # graph of the network
         self.graph = nx.DiGraph()
-        self.port_stats = {}
+        self.port_stats = {} # 
+        
+        
 
         # thread che lancia periodicamente le richieste
         self.monitor_thread = hub.spawn(self._monitor)
@@ -146,7 +148,7 @@ class LoadBalancer(app_manager.RyuApp):
 
         # trying to find the host that the message is looking for
         for host in get_all_host(self):
-            if host.ipv4 and arp_in.dst_ip in host.ipv4:
+            if host.ipv4 and arp_in.dst_ip in host.ipv4: # checks if dst_ip is in host.ipv4 only if host.ipv4 is not Non and if is not empty
                 destination_host_mac = host.mac
                 break
 
@@ -203,7 +205,6 @@ class LoadBalancer(app_manager.RyuApp):
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
-        arp_pkt = pkt.get_protocol(arp.arp)
 
         # if an ARP packet is sent it is managed with the proxy arp
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
@@ -321,12 +322,13 @@ class LoadBalancer(app_manager.RyuApp):
 
                 bandwith_usage = bytes_diff / TIME_INTERVAL
 
+             # link adjourned
             if dpid in self.graph:
                 for link in self.graph[dpid]:
                     if self.graph[dpid][link]['port'] == port_no:
                         self.graph[dpid][link]['weight'] = bandwith_usage
                         self.logger.info(f"link {dpid} -> {link} (port {port_no} adjourned {bandwith_usage} B/s)")
-                        break # link adjourned
+                        break
 
             self.port_stats[key] = current_tx_bytes
         return
