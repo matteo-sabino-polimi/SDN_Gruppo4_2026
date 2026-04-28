@@ -14,7 +14,7 @@ Comando per il setup della rete simulata in mininet
 ```
 In caso di rete custom
 ``` bash
-    mn --custom load_balancer_topo.py --topo LBTopo
+    sudo mn --mac --custom load_balancer_topo.py --topo LBTopo
 ```
 
 Comando per il setup di flowmanager
