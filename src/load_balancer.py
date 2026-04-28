@@ -41,9 +41,6 @@ class LoadBalancer(app_manager.RyuApp):
 
          # datapath table
         self.datapaths = {}
-        
-        # arp table ip to mac
-        self.arp_table = {}
 
         # graph of the network
         self.graph = nx.DiGraph()
@@ -131,6 +128,7 @@ class LoadBalancer(app_manager.RyuApp):
     
     # define our own proxy arp
     def proxy_arp(self, msg):
+        
         datapath = msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -140,7 +138,7 @@ class LoadBalancer(app_manager.RyuApp):
         eth_in = pkt_in.get_protocol(ethernet.ethernet)
         arp_in = pkt_in.get_protocol(arp.arp)
 
-        # ARP REQUEST messages are the only ones managed by this function and we check so
+        # ARP REQUEST messages are the only ones managed by this function
         if arp_in.opcode != arp.ARP_REQUEST:
             return
 
@@ -196,10 +194,9 @@ class LoadBalancer(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         
-        
         # extract the message
         msg = ev.msg
-        datapath = msg.datapath # id of thw switch
+        datapath = msg.datapath # id of the switch
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         in_port = msg.match['in_port'] # in port from which the package arrived
@@ -210,9 +207,8 @@ class LoadBalancer(app_manager.RyuApp):
 
         # if an ARP packet is sent it is managed with the proxy arp
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
-            self.arp_table[arp_pkt.src_ip] = arp_pkt.src_mac
             self.proxy_arp(msg)
-            return
+            return # the rules are not installed when doing the arp request
 
         # ignore all LLDP packets so that ryu can manage them and populate get_all_links
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
@@ -253,7 +249,7 @@ class LoadBalancer(app_manager.RyuApp):
 
         datapath.send_msg(out)
 
-        # add rule for the next packets
+        # 2. add rule for the next packets
         
         match = parser.OFPMatch(
             eth_dst=destination_mac
