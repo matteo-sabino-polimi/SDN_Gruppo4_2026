@@ -1,6 +1,8 @@
 # Possible topology in mininet 
-#   --arp not required, ARP PROXY INSTALLED
-#   --mac to use incremental values for the mac addesses
+#   --arp NOT required, ARP PROXY INSTALLED (FLOODING NOT POSSIBLE, hosts are discovered only if they talked before)
+#       (pingall suggested at startup to discover all hosts)
+#
+#   --mac to use incremental values for the mac addesses (Optional but usefull)
 # sudo mn --mac torus,3,3 --controller-remote
 
 
