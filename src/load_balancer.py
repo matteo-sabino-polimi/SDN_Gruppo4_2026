@@ -251,7 +251,7 @@ class LoadBalancer(app_manager.RyuApp):
             datapath=datapath,
             priority=10,
             match=match,
-            idle_timeout = TIME_INTERVAL # interval of stats report
+            idle_timeout = TIME_INTERVAL, # interval of stats report
             instructions=inst
             )
         
