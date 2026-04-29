@@ -347,7 +347,7 @@ class LoadBalancer(app_manager.RyuApp):
                 bytes_diff = current_tx_bytes - previous_tx_bytes
                 bandwith_usage = bytes_diff / TIME_INTERVAL
 
-                 # link adjourned
+                # link adjourned
                 if dpid in self.graph:
                     for link in self.graph[dpid]:
                         if self.graph[dpid][link]['port'] == port_no:
