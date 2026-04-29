@@ -4,8 +4,8 @@
 from mininet.topo import Topo   #definire la topologia
 
 """h1 -- s1 -- s3 -- s2 -- h2
-            \      /
-             \ s4 /
+         /   \      /
+      h2/     \ s4 /
 """
 class LBTopo ( Topo ):
 
@@ -14,6 +14,7 @@ class LBTopo ( Topo ):
     #Aggiungo nuovi host
     host1= self.addHost('h1')
     host2= self.addHost('h2')
+    host3= self.addHost('h3')
 
     #Aggiungo nuovi switch
     switch1=self.addSwitch('s1')
@@ -26,6 +27,7 @@ class LBTopo ( Topo ):
     self.addLink(switch1,host1,port1=1)
     self.addLink(switch1,switch3,port1=2)
     self.addLink(switch1,switch4,port1=3)
+    self.addLink(switch1,host3,port1=4)
 
     #switch2
     self.addLink(switch2,host2,port1=1)
