@@ -3,9 +3,11 @@
 
 from mininet.topo import Topo   #definire la topologia
 
-"""h1 -- s1 -- s3 -- s2 -- h2
+"""h1 -- s1 -- s3 -- s4
          /   \      /
-      h2/     \ s4 /
+      h3/     \ s2 /
+              /
+          h2/
 """
 class LBTopo ( Topo ):
 
@@ -24,14 +26,17 @@ class LBTopo ( Topo ):
 
     #Aggiungo i link agli switch
     #switch1
-    self.addLink(switch1,host1,port1=1)
-    self.addLink(switch1,switch3,port1=2)
-    self.addLink(switch1,switch4,port1=3)
-    self.addLink(switch1,host3,port1=4)
+    self.addLink(switch1,host1)
+    self.addLink(switch1,switch2)
+    self.addLink(switch1,switch3)
+    self.addLink(switch1,host3)
 
-    #switch2
-    self.addLink(switch2,host2,port1=1)
-    self.addLink(switch2,switch3,port1=2)
-    self.addLink(switch2,switch4,port1=3)
+    # switch2
+    self.addLink(switch2, switch1)
+    self.addLink(switch2, switch4)
+    self.addLink(switch2, host2)
+    
+    # switch4
+    self.addLink(switch4, switch3)
 
 topos = { 'LBTopo' : ( lambda: LBTopo() ) }

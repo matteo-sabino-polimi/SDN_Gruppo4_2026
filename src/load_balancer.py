@@ -280,6 +280,7 @@ class LoadBalancer(app_manager.RyuApp):
         # 2. add rule for the next packets
         
         match = parser.OFPMatch(
+            eth_src=eth.src,
             eth_dst=destination_mac
             )
         
@@ -351,7 +352,7 @@ class LoadBalancer(app_manager.RyuApp):
                 if dpid in self.graph:
                     for link in self.graph[dpid]:
                         if self.graph[dpid][link]['port'] == port_no:
-                            self.graph[dpid][link]['weight'] = bandwith_usage
+                            self.graph[dpid][link]['weight'] = 1 + bandwith_usage
                             self.logger.info(f"link {dpid} -> {link} (port {port_no} adjourned {bandwith_usage} B/s)")
                             break
 

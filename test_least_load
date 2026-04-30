@@ -2,13 +2,13 @@ la prima cosa da fare è far conoscere tutti gli host al proxy ARP e popolare le
 mininet> pingall
 
 Apro i terminali di tre host
-mininet> xterm h1x1 h2x2 h3x3
+mininet> xterm h1 h2 h3
 
 Creo carico pesante tra h1 e h2
 Sul terminale di h2 (che farà da server), avvia iPerf:
 iperf -s -u -i 1
 
-Sul terminale di h1 (che farà da client), invia un flusso UDP massiccio verso h2 per 60 secondi:
+Sul terminale di h1 (che farà da client), invia un flusso UDP da 10MB/s verso h2 per 60 secondi:
 iperf -c 10.0.0.2 -u -b 10M -t 60
 
 Genera una nuova connessione da h3
@@ -16,7 +16,7 @@ Mentre l'iPerf tra h1 e h2 sta ancora girando (e i pesi sul loro percorso sono a
 ping 10.0.0.2
 
 Essendo una nuova connessione, il pacchetto passerà per il controllore. Il controllore eseguirà Dijkstra sul grafo aggiornato. 
-Poiché il percorso "diretto" è appesantito da iPerf, Dijkstra calcola un percorso alternativo più scarico
+Poiché il percorso "diretto" è appesantito da iPerf, Dijkstra calcola un percorso alternativo piuù lungo ma più scarico
 
 Verifica visiva
 Metodo 1: Flowmanager (La GUI)
