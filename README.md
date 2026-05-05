@@ -21,6 +21,11 @@ Rete custom con link a capacità predefinita [100Mb/s]
 sudo mn --mac --custom topo_load_balancer.py --topo LBTopo --controller remote --link tc,bw=100
 ```
 
+Rete custom che simula le condizioni del laboratorio
+``` bash
+sudo mn --mac --custom topo_simulated_lab.py --topo LBTopo --controller remote
+```
+
 Comando per il setup di flowmanager
 ``` bash
 ryu-manager --observe-link load_balancer.py flowmanager/flowmanager.py
