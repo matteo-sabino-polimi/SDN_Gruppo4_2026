@@ -296,6 +296,7 @@ class LoadBalancer(app_manager.RyuApp):
             priority=10,
             match=match,
             idle_timeout = TIME_INTERVAL, # interval of stats report
+            hard_timeot = TIME_INTERVAL * 2, # hard timout to force rule suppression
             instructions=inst
             )
         
