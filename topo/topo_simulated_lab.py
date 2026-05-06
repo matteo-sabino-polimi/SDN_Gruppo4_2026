@@ -33,9 +33,10 @@ class LBTopo ( Topo ):
 
     # Add links for all switches
     # switch1
-    self.addLink(switch1,host1)
-    self.addLink(switch1,switch2)
-    self.addLink(switch1,switch6)
+    self.addLink(switch1, host1)
+    self.addLink(switch1, switch2)
+    self.addLink(switch1, switch4)
+    self.addLink(switch1, switch6)
 
     # switch2
     self.addLink(switch2, switch1)
@@ -47,6 +48,7 @@ class LBTopo ( Topo ):
     
     # switch4
     self.addLink(switch4, host2)
+    self.addLink(switch4, switch1)
     self.addLink(switch4, switch3)
     self.addLink(switch4, switch5)
     
