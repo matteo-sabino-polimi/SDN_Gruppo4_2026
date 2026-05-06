@@ -3,15 +3,15 @@
 
 from mininet.topo import Topo   
 
-""" h3          h2
-      \        /
+"""            h4
+              /
        s5 -- s4
-      /        \
-     s6        s3
-      \        /
+      /    /   \
+     s6   /    s3
+      \  /     /
        s1 -- s2
-      /
-    h1
+     / \ \
+   h1  h2 h3
 """
 
 class LBTopo ( Topo ):
@@ -35,8 +35,8 @@ class LBTopo ( Topo ):
     # Add links for all switches
     # switch1
     self.addLink(switch1, host1)
+    self.addLink(switch1, host2)
     self.addLink(switch1, host3)
-    self.addLink(switch1, host4)
     self.addLink(switch1, switch2)
     self.addLink(switch1, switch4)
     self.addLink(switch1, switch6)
@@ -50,7 +50,7 @@ class LBTopo ( Topo ):
     self.addLink(switch3, switch4)
     
     # switch4
-    self.addLink(switch4, host2)
+    self.addLink(switch4, host4)
     self.addLink(switch4, switch1)
     self.addLink(switch4, switch3)
     self.addLink(switch4, switch5)
