@@ -22,6 +22,7 @@ class LBTopo ( Topo ):
     host1= self.addHost('h1')
     host2= self.addHost('h2')
     host3= self.addHost('h3')
+    host4= self.addHost('h4')
 
     # Add switches
     switch1=self.addSwitch('s1')
@@ -35,6 +36,7 @@ class LBTopo ( Topo ):
     # switch1
     self.addLink(switch1, host1)
     self.addLink(switch1, host3)
+    self.addLink(switch1, host4)
     self.addLink(switch1, switch2)
     self.addLink(switch1, switch4)
     self.addLink(switch1, switch6)
