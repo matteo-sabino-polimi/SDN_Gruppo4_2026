@@ -7,7 +7,7 @@ from mininet.topo import Topo   #definire la topologia
          /   \      /
       h3/     \ s2 /
               /
-          h2/
+           h2/
 """
 class LBTopo ( Topo ):
 
