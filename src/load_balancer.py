@@ -44,11 +44,12 @@ class LoadBalancer(app_manager.RyuApp):
 
         # graph of the network
         self.graph = nx.DiGraph()
-        self.port_stats = {} 
+        self.port_stats = {}
 
         # thread that periodically monitor the links
         self.monitor_thread = hub.spawn(self._monitor)
-        
+    
+    # manage connected switches
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _state_change_handler(self, ev):
         datapath = ev.datapath
@@ -57,16 +58,18 @@ class LoadBalancer(app_manager.RyuApp):
         elif ev.state == DEAD_DISPATCHER:
             self.datapaths.pop(datapath.id, None)
 
-    # event that is executed when a new switch connects in the network
+    # event that is executed when a new switch connects/disconnects in the network
     @set_ev_cls(event.EventSwitchEnter)
+    @set_ev_cls(event.EventSwitchLeave)
     def build_topology(self, ev):
-        # graph cleared each time
+        # graph cleared each time a new switch is connected/disconnected
         self.graph.clear()
         
         # add all known switches to the graph
         for switch in get_all_switch(self):
             self.graph.add_node(switch.dp.id)
             
+        # generate all links between the switches
         for link in get_all_link(self):
             self.graph.add_edge(
                 link.src.dpid,
@@ -74,7 +77,6 @@ class LoadBalancer(app_manager.RyuApp):
                 port = link.src.port_no,
                 weight = 1 # set starting weight for all edges
             )
-            
 
     # basic rule is to send all packages to controller if no rule is found
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures) # we want to intercept the event SwitchFeatures, it is used to install the rules at the startup of the switch
