@@ -39,7 +39,7 @@ class LoadBalancer(app_manager.RyuApp):
         super(LoadBalancer, self).__init__(*args, **kwargs)
         self.mac_to_port = {} # empty dictionary
 
-         # datapath table
+        # datapath table
         self.datapaths = {}
 
         # graph of the network
