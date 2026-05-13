@@ -37,7 +37,6 @@ class LoadBalancer(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(LoadBalancer, self).__init__(*args, **kwargs)
-        self.mac_to_port = {} # empty dictionary
 
         # datapath table
         self.datapaths = {}
@@ -137,26 +136,27 @@ class LoadBalancer(app_manager.RyuApp):
             if host.mac == destination_mac:
                 return (host.port.dpid, host.port.port_no)
         return (None,None)
-
-    # find the next switch to which the package has to be sent
-    def find_next_hop_to_destination(self,source_id,destination_id):
-        net = self.graph
-        for link in get_all_link(self):
-            if not net.has_edge(link.src.dpid, link.dst.dpid):
-                net.add_edge(link.src.dpid, link.dst.dpid,
-                         port=link.src.port_no, weight=1)
-
-        path = nx.dijkstra_path(
-            net,
-            source_id,
-            destination_id,
-            weight='weight'
-        )
-
-        first_link = net[ path[0] ][ path[1] ]
-
-        return first_link['port']
     
+    # find the path that the flow must follow
+    def find_path(self, source_id, destination_id):
+        net = self.graph
+        try:
+            path = nx.dijkstra_path(
+                net,
+                source_id,
+                destination_id,
+                weight='weight'
+            )
+            return path # returns a list of numbers
+        
+        except nx.NetworkXNoPath:
+            self.logger.warning(f"No path between {source_id} and {destination_id}")
+            return None
+        
+        except nx.NodeNotFound:
+            self.logger.warning(f"Switch not found in topology graph")
+            return None
+        
     # define our own proxy arp
     def proxy_arp(self, msg):
         
@@ -251,19 +251,24 @@ class LoadBalancer(app_manager.RyuApp):
         destination_mac = eth.dst
 
         # find destination switch
-        (dst_dpid, dst_port) = self.find_destination_switch(destination_mac)
+        (dst_dpid, dst_port) = self.find_destination_switch(destination_mac) # find last switch and it's port connected to destination host
 
-        # host not found
         if dst_dpid is None:
-            # print "DP: ", datapath.id, "Host not found: ", pkt_ip.dst
+            self.logger.warning(f"Destination host not found")
+            return
+        
+        path = self.find_path(datapath.id, dst_dpid)
+        
+        if path is None:
+            self.logger.warning(f"No path found")
             return
 
-        if dst_dpid == datapath.id:
+        if len(path) == 1:
             # used if host is directly connected
-            output_port = dst_port    
+            output_port = dst_port
         else:
             # used if host is not directly connected
-            output_port = self.find_next_hop_to_destination(datapath.id,dst_dpid)
+            output_port = self.graph[path[0]][path[1]]['port'] # output_port is the port that connects the first switch on the path to the second one 
 
         # 1. the received packet is sent to correct port (I send it manually because if it arrives before the installation of the rule it is sent back to me)
         
@@ -279,13 +284,68 @@ class LoadBalancer(app_manager.RyuApp):
 
         datapath.send_msg(out)
 
-        # 2. add rule for the next packets
+        # 2. add rule to all switches on the path (except last switch)
+        
+        for i in range(len(path) - 1):
+            
+            current_switch = path[i] 
+            next_switch = path[i + 1]
+            
+            current_switch_output_port = self.graph[current_switch][next_switch]['port']
+            
+            current_datapath = self.datapaths.get(current_switch)
+            
+            if current_datapath is None:
+                self.logger.warning(f"Datapath {current_switch} not found")
+                return
+            
+            # technically ofproto and parser can change for each switch
+            ofproto = current_datapath.ofproto
+            parser = current_datapath.ofproto_parser
+            
+            match = parser.OFPMatch(
+                eth_src = eth.src,
+                eth_dst = destination_mac
+            )
+            
+            actions = [parser.OFPActionOutput(current_switch_output_port)]
+            
+            inst = [
+                parser.OFPInstructionActions(
+                    ofproto.OFPIT_APPLY_ACTIONS,
+                    actions
+                )
+            ]
+            
+            mod = parser.OFPFlowMod(
+                datapath = current_datapath, # send the mod to the switch in the list selected
+                priority = 10,
+                match = match,
+                idle_timeout = TIME_INTERVAL,
+                instructions = inst
+            )
+            current_datapath.send_msg(mod) # send the mod to the correct switch
+
+        # 3. install the rule on the last switch
+        
+        last_switch = path[-1]
+        last_datapath = self.datapaths.get(last_switch)
+        
+        if last_datapath is None:
+            self.logger.warning(f"Datapath {last_switch} not found")
+            return
+
+        # technically ofproto and parser can change for each switch
+        ofproto = last_datapath.ofproto
+        parser = last_datapath.ofproto_parser
         
         match = parser.OFPMatch(
-            eth_src=eth.src,
-            eth_dst=destination_mac
+                eth_src = eth.src,
+                eth_dst = destination_mac
             )
         
+        actions = [parser.OFPActionOutput(dst_port)]
+            
         inst = [
             parser.OFPInstructionActions(
                 ofproto.OFPIT_APPLY_ACTIONS,
@@ -294,17 +354,15 @@ class LoadBalancer(app_manager.RyuApp):
         ]
         
         mod = parser.OFPFlowMod(
-            datapath=datapath,
-            priority=10,
-            match=match,
-            idle_timeout = TIME_INTERVAL, # interval of stats report
-            # hard_timeout = TIME_INTERVAL * 2, # hard timout to force rule suppression
-            instructions=inst
-            )
+            datapath = last_datapath,
+            priority = 10,
+            match = match,
+            idle_timeout = TIME_INTERVAL,
+            instructions = inst
+        )
         
-        # send the rule to the switch
-        datapath.send_msg(mod)
-
+        last_datapath.send_msg(mod)
+        
         return
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
@@ -335,6 +393,7 @@ class LoadBalancer(app_manager.RyuApp):
         self.logger.info('---------------- -------- '
         '-------- -------- -------- '
         '-------- -------- --------')
+        
         for stat in body:
             self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
                 ev.msg.datapath.id, stat.port_no,
@@ -351,14 +410,13 @@ class LoadBalancer(app_manager.RyuApp):
                 bytes_diff = current_tx_bytes - previous_tx_bytes
                 bandwith_usage = bytes_diff / TIME_INTERVAL
 
-                # link adjourned
+                # link updated
                 if dpid in self.graph:
                     for link in self.graph[dpid]:
                         if self.graph[dpid][link]['port'] == port_no:
                             self.graph[dpid][link]['weight'] = 1 + bandwith_usage
-                            self.logger.info(f"link {dpid} -> {link} (port {port_no} adjourned {bandwith_usage} B/s)")
+                            self.logger.info(f"link {dpid} -> {link} (port {port_no} updated {bandwith_usage} B/s)")
                             break
 
             self.port_stats[key] = current_tx_bytes
         return
-
