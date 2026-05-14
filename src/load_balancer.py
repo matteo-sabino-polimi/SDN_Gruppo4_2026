@@ -28,11 +28,13 @@ from ryu.lib.packet import arp
 import networkx as nx # library for graphs's algorithms
 
 from math import log1p
+import time
 
 # to draw the possible network design
 # import matplotlib.pyplot as plt
 
 TIME_INTERVAL = 10 # in seconds
+ALPHA = 0.1 # weight given to new data (For the Exponentially Weighted Moving Average filter)
 
 class LoadBalancer(app_manager.RyuApp):
     OFP_VERSION = [ofproto_v1_3.OFP_VERSION] # version we want to manage
@@ -47,7 +49,15 @@ class LoadBalancer(app_manager.RyuApp):
         self.graph = nx.DiGraph()
         
         # dictionary of port stats for each datapath
-        self.previous_stats = {}
+        self.port_stats = {}
+        
+        self.last_bytes = {}
+        self.last_time = {}
+        
+        # exponentially weighted moving average (what is this?)
+        self.ewma = {}
+        
+        self.alpha = ALPHA
 
         # thread that periodically monitors the links
         self.monitor_thread = hub.spawn(self._monitor)
@@ -428,24 +438,44 @@ class LoadBalancer(app_manager.RyuApp):
     
     def _compute_bandwidth_usage(self, dpid, port_no, current_tx_bytes):
         
+        now = time.monotonic()
+        
         switch_port_id = (dpid, port_no)
         
-        previous_tx_bytes = self.previous_stats.get(switch_port_id)
+        last_bytes = self.last_bytes.get(switch_port_id)
+        last_time = self.last_time.get(switch_port_id)
         
-        # update stored values
-        self.previous_stats[switch_port_id] = current_tx_bytes
-        
-        if previous_tx_bytes is None:
+        if last_bytes is None or last_time is None:
+            self.last_bytes[switch_port_id] = current_tx_bytes
+            self.last_time[switch_port_id] = now
             return None
         
-        bytes_diff = current_tx_bytes - previous_tx_bytes
+        bytes_diff = current_tx_bytes - last_bytes
+        
+        dt = now - last_time
+        
+        # update stored values and time 
+        self.last_bytes[switch_port_id] = current_tx_bytes
+        self.last_time[switch_port_id] = now
+        
+        if dt <= 0:
+            return None
         
         if bytes_diff < 0:
             return None
         
-        bandwidth_usage = bytes_diff / TIME_INTERVAL
+        bandwidth_usage = bytes_diff / dt
         
-        return bandwidth_usage
+        previous_ewma = self.ewma.get(switch_port_id)
+        
+        if previous_ewma is None:
+            self.ewma[switch_port_id] = bandwidth_usage
+            return bandwidth_usage
+        
+        filtered = self.alpha * bandwidth_usage + (1-self.alpha) * previous_ewma # applying the EWMA filter
+        self.ewma[switch_port_id] = filtered
+        
+        return filtered
     
     def _update_link_weight(self, dpid, port_no, bandwidth_usage):
         
@@ -455,9 +485,11 @@ class LoadBalancer(app_manager.RyuApp):
         for neighbor_switch in self.graph[dpid]:
             
             edge = self.graph[dpid][neighbor_switch]
+            reverse_edge = self.graph[neighbor_switch][dpid]
             
             if edge['port'] == port_no:
-                edge['weight'] = 1 + log1p(bandwidth_usage) # logaritmic increase for the weight
+                edge['weight'] = 1 + bandwidth_usage # EWMA filter already applied, no need to use the log of the value
+                reverse_edge['weight'] = 1 + bandwidth_usage
             
                 self.logger.info(
                     f"link {dpid} --> {neighbor_switch} "
