@@ -348,7 +348,6 @@ class LoadBalancer(app_manager.RyuApp):
         datapath.send_msg(out)
 
         # 2. add rule to all switches on the path (except last switch)
-        
         for i in range(len(path) - 1):
             
             current_switch = path[i] 
@@ -356,65 +355,73 @@ class LoadBalancer(app_manager.RyuApp):
             
             current_switch_output_port = self.graph[current_switch][next_switch]['port']
             
+            # --- NUOVA LOGICA IN_PORT ---
+            if i == 0:
+                # Per il primo switch, la porta di ingresso è quella da cui ha origine il traffico
+                current_in_port = in_port
+            else:
+                # Per gli altri switch, la porta di ingresso è quella collegata allo switch precedente
+                prev_switch = path[i - 1]
+                current_in_port = self.graph[current_switch][prev_switch]['port']
+            # ----------------------------
+            
             current_datapath = self.datapaths.get(current_switch)
-            
             if current_datapath is None:
-                self.logger.warning(f"Datapath {current_switch} not found")
-                return
+                continue
             
-            # technically ofproto and parser can change for each switch
             ofproto = current_datapath.ofproto
             parser = current_datapath.ofproto_parser
             
+            # Aggiunto in_port al match
             match = parser.OFPMatch(
+                in_port = current_in_port,
                 eth_src = eth.src,
                 eth_dst = destination_mac
             )
             
             actions = [parser.OFPActionOutput(current_switch_output_port)]
             
-            inst = [
-                parser.OFPInstructionActions(
-                    ofproto.OFPIT_APPLY_ACTIONS,
-                    actions
-                )
-            ]
+            inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
             
             mod = parser.OFPFlowMod(
-                datapath = current_datapath, # send the mod to the switch in the list selected
+                datapath = current_datapath,
                 priority = 10,
                 match = match,
                 idle_timeout = TIME_INTERVAL,
                 instructions = inst
             )
-            current_datapath.send_msg(mod) # send the mod to the correct switch
+            current_datapath.send_msg(mod)
 
         # 3. install the rule on the last switch
-        
         last_switch = path[-1]
         last_datapath = self.datapaths.get(last_switch)
         
         if last_datapath is None:
-            self.logger.warning(f"Datapath {last_switch} not found")
             return
 
-        # technically ofproto and parser can change for each switch
         ofproto = last_datapath.ofproto
         parser = last_datapath.ofproto_parser
         
+        # --- NUOVA LOGICA IN_PORT PER L'ULTIMO SWITCH ---
+        if len(path) == 1:
+            # Se il percorso è composto da un solo switch (sorgente e destinazione sullo stesso switch)
+            last_in_port = in_port
+        else:
+            # La porta di ingresso è quella collegata al penultimo switch del percorso
+            prev_switch = path[-2]
+            last_in_port = self.graph[last_switch][prev_switch]['port']
+        # ------------------------------------------------
+
+        # Aggiunto in_port al match
         match = parser.OFPMatch(
-                eth_src = eth.src,
-                eth_dst = destination_mac
-            )
+            in_port = last_in_port,
+            eth_src = eth.src,
+            eth_dst = destination_mac
+        )
         
         actions = [parser.OFPActionOutput(dst_port)]
             
-        inst = [
-            parser.OFPInstructionActions(
-                ofproto.OFPIT_APPLY_ACTIONS,
-                actions
-            )
-        ]
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
         
         mod = parser.OFPFlowMod(
             datapath = last_datapath,
@@ -423,9 +430,8 @@ class LoadBalancer(app_manager.RyuApp):
             idle_timeout = TIME_INTERVAL,
             instructions = inst
         )
-        
         last_datapath.send_msg(mod)
-        
+                
         return
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
