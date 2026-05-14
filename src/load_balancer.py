@@ -169,6 +169,31 @@ class LoadBalancer(app_manager.RyuApp):
         except nx.NodeNotFound:
             self.logger.warning(f"Switch not found in topology graph")
             return None
+
+    def get_edge_ports(self):
+        """Trova tutte le porte degli switch che non sono collegate ad altri switch."""
+        edge_ports = []
+        
+        # Recupera tutti gli switch e tutti i link (collegamenti tra switch)
+        switches = get_all_switch(self)
+        internal_links = get_all_link(self)
+
+        # Crea un set di tutte le porte interne (switch-to-switch)
+        internal_ports = set()
+        for link in internal_links:
+            internal_ports.add((link.src.dpid, link.src.port_no))
+            internal_ports.add((link.dst.dpid, link.dst.port_no))
+
+        # Trova le porte che non sono nel set delle porte interne
+        for switch in switches:
+            for port in switch.ports:
+                # Escludiamo la porta LOCAL dello switch
+                if port.port_no != switch.dp.ofproto.OFPP_LOCAL:
+                    # Se la porta non è un collegamento tra switch, è una porta Edge
+                    if (switch.dp.id, port.port_no) not in internal_ports:
+                        edge_ports.append((switch.dp, port.port_no))
+                        
+        return edge_ports
         
     # define our own proxy arp
     def proxy_arp(self, msg):
@@ -193,6 +218,31 @@ class LoadBalancer(app_manager.RyuApp):
             if host.ipv4 and arp_in.dst_ip in host.ipv4: # checks if dst_ip is in host.ipv4 only if host.ipv4 is not Non and if is not empty
                 destination_host_mac = host.mac
                 break
+        
+        if destination_host_mac is None:
+            self.logger.info(f"Host {arp_in.dst_ip} sconosciuto. Eseguo Smart Edge Flooding.")
+            
+            # Recuperiamo tutte le porte rivolte verso gli host
+            edge_ports = self.get_edge_ports()
+            
+            for dp, edge_port_no in edge_ports:
+                # Evitiamo di rimandare la richiesta ARP indietro da dove è arrivata
+                if dp.id == datapath.id and edge_port_no == in_port:
+                    continue
+
+                # Creiamo l'azione per inviare il pacchetto su quella specifica porta Edge
+                actions = [parser.OFPActionOutput(edge_port_no)]
+                
+                # Impacchettiamo l'ARP originario e lo spariamo fuori
+                out = parser.OFPPacketOut(
+                    datapath=dp,
+                    buffer_id=ofproto.OFP_NO_BUFFER,
+                    in_port=ofproto.OFPP_CONTROLLER,
+                    actions=actions,
+                    data=msg.data
+                )
+                dp.send_msg(out)
+            return
 
         # if host is not found drop the packet
         if destination_host_mac is None:
