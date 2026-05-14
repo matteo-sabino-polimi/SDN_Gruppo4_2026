@@ -34,6 +34,23 @@ ryu-manager --observe-link load_balancer.py flowmanager/flowmanager.py
 Link per il monitoring tramite interfaccia grafica
 [http://localhost:8080/home/index.html](http://localhost:8080/home/index.html)
 
+Comando per l'avvio dei terminali
+``` bash
+xterm h1 h2 h3 h4
+```
+
+Comando per l'host che svolge il ruolo del server
+``` bash
+iperf -s -u -i 1
+```
+
+Comando per l'host che svolge il ruolo del client (utilizzando l'ip del server)
+``` bash
+iperf -c 10.0.0.4 -u -b 10M -t 120
+```
+
+
+
 ## Authors
 - Matteo
 - Pietro
