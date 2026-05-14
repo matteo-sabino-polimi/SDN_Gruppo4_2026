@@ -23,8 +23,8 @@ from ryu.base import app_manager
 from ryu.ofproto import ofproto_v1_3
 from ryu.topology import event, switches
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host # import to know the topology of the network
-from ryu.lib.packet import packet, ethernet, ether_types
 from ryu.lib.packet import arp
+from ryu.lib.packet import packet, ethernet, ether_types, ipv4, tcp, udp, in_proto
 import networkx as nx # library for graphs's algorithms
 
 from math import log1p
@@ -298,26 +298,32 @@ class LoadBalancer(app_manager.RyuApp):
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocol(ethernet.ethernet)
 
-        # if an ARP packet is sent it is managed with the proxy arp
+        # se è un pacchetto ARP, è gestito dal proxy arp
         if eth.ethertype == ether_types.ETH_TYPE_ARP:
             self.proxy_arp(msg)
-            return # the rules are not installed when doing the arp request
+            return
 
         # ignore all LLDP packets so that ryu can manage them and populate get_all_links
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             return
 
-        # ignore all non IPv4 packets (es. ARP, LLDP)
+        # ignore all non IPv4 packets
         if eth.ethertype != ether_types.ETH_TYPE_IP:
             return
         
+        # --- ESTRAZIONE LIVELLO 3 E 4 ---
+        pkt_ipv4 = pkt.get_protocol(ipv4.ipv4)
+        pkt_tcp = pkt.get_protocol(tcp.tcp)
+        pkt_udp = pkt.get_protocol(udp.udp)
+        # --------------------------------
+
         destination_mac = eth.dst
 
         # find destination switch
-        (dst_dpid, dst_port) = self.find_destination_switch(destination_mac) # find last switch and it's port connected to destination host
+        (dst_dpid, dst_port) = self.find_destination_switch(destination_mac)
 
         if dst_dpid is None:
-            self.logger.warning(f"Destination host not found")
+            # disattivato il log per non spammare la console, il controller aspetta silenziosamente
             return
         
         path = self.find_path(datapath.id, dst_dpid)
@@ -330,13 +336,11 @@ class LoadBalancer(app_manager.RyuApp):
             # used if host is directly connected
             output_port = dst_port
         else:
-            # used if host is not directly connected
-            output_port = self.graph[path[0]][path[1]]['port'] # output_port is the port that connects the first switch on the path to the second one 
+            # output_port del primo switch verso il secondo
+            output_port = self.graph[path[0]][path[1]]['port'] 
 
-        # 1. the received packet is sent to correct port (I send it manually because if it arrives before the installation of the rule it is sent back to me)
-        
+        # 1. Inoltro del pacchetto intercettato
         actions = [parser.OFPActionOutput(output_port)]
-
         out = parser.OFPPacketOut(
             datapath=datapath,
             buffer_id=msg.buffer_id,
@@ -344,53 +348,71 @@ class LoadBalancer(app_manager.RyuApp):
             actions=actions,
             data=msg.data
         )
-
         datapath.send_msg(out)
+
+        # --- CREAZIONE MATCH DINAMICO BASE (Livello 3 e 4) ---
+        match_kwargs = {
+            'eth_type': ether_types.ETH_TYPE_IP,
+            'eth_src': eth.src,
+            'eth_dst': eth.dst,
+            'ipv4_src': pkt_ipv4.src,
+            'ipv4_dst': pkt_ipv4.dst
+        }
+
+        if pkt_tcp:
+            match_kwargs['ip_proto'] = in_proto.IPPROTO_TCP
+            match_kwargs['tcp_src'] = pkt_tcp.src_port
+            match_kwargs['tcp_dst'] = pkt_tcp.dst_port
+        elif pkt_udp:
+            match_kwargs['ip_proto'] = in_proto.IPPROTO_UDP
+            match_kwargs['udp_src'] = pkt_udp.src_port
+            match_kwargs['udp_dst'] = pkt_udp.dst_port
+        # ----------------------------------------------------
 
         # 2. add rule to all switches on the path (except last switch)
         for i in range(len(path) - 1):
             
             current_switch = path[i] 
             next_switch = path[i + 1]
-            
             current_switch_output_port = self.graph[current_switch][next_switch]['port']
             
-            # --- NUOVA LOGICA IN_PORT ---
+            # Calcolo porta di ingresso
             if i == 0:
-                # Per il primo switch, la porta di ingresso è quella da cui ha origine il traffico
                 current_in_port = in_port
             else:
-                # Per gli altri switch, la porta di ingresso è quella collegata allo switch precedente
                 prev_switch = path[i - 1]
                 current_in_port = self.graph[current_switch][prev_switch]['port']
-            # ----------------------------
             
             current_datapath = self.datapaths.get(current_switch)
+            
             if current_datapath is None:
                 continue
             
-            ofproto = current_datapath.ofproto
-            parser = current_datapath.ofproto_parser
+            current_ofproto = current_datapath.ofproto
+            current_parser = current_datapath.ofproto_parser
             
-            # Aggiunto in_port al match
-            match = parser.OFPMatch(
-                in_port = current_in_port,
-                eth_src = eth.src,
-                eth_dst = destination_mac
-            )
+            # Applichiamo il match dinamico unendo in_port
+            switch_match_kwargs = match_kwargs.copy()
+            switch_match_kwargs['in_port'] = current_in_port
+            match = current_parser.OFPMatch(**switch_match_kwargs)
             
-            actions = [parser.OFPActionOutput(current_switch_output_port)]
+            actions = [current_parser.OFPActionOutput(current_switch_output_port)]
             
-            inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+            inst = [
+                current_parser.OFPInstructionActions(
+                    current_ofproto.OFPIT_APPLY_ACTIONS,
+                    actions
+                )
+            ]
             
-            mod = parser.OFPFlowMod(
+            mod = current_parser.OFPFlowMod(
                 datapath = current_datapath,
                 priority = 10,
                 match = match,
                 idle_timeout = TIME_INTERVAL,
                 instructions = inst
             )
-            current_datapath.send_msg(mod)
+            current_datapath.send_msg(mod) 
 
         # 3. install the rule on the last switch
         last_switch = path[-1]
@@ -399,31 +421,31 @@ class LoadBalancer(app_manager.RyuApp):
         if last_datapath is None:
             return
 
-        ofproto = last_datapath.ofproto
-        parser = last_datapath.ofproto_parser
+        last_ofproto = last_datapath.ofproto
+        last_parser = last_datapath.ofproto_parser
         
-        # --- NUOVA LOGICA IN_PORT PER L'ULTIMO SWITCH ---
+        # Calcolo in_port per l'ultimo switch
         if len(path) == 1:
-            # Se il percorso è composto da un solo switch (sorgente e destinazione sullo stesso switch)
             last_in_port = in_port
         else:
-            # La porta di ingresso è quella collegata al penultimo switch del percorso
             prev_switch = path[-2]
             last_in_port = self.graph[last_switch][prev_switch]['port']
-        # ------------------------------------------------
 
-        # Aggiunto in_port al match
-        match = parser.OFPMatch(
-            in_port = last_in_port,
-            eth_src = eth.src,
-            eth_dst = destination_mac
-        )
+        # Applichiamo il match dinamico unendo last_in_port (ATTENZIONE AL NOME VARIABILE)
+        last_match_kwargs = match_kwargs.copy()
+        last_match_kwargs['in_port'] = last_in_port
+        match = last_parser.OFPMatch(**last_match_kwargs)
         
-        actions = [parser.OFPActionOutput(dst_port)]
+        actions = [last_parser.OFPActionOutput(dst_port)]
             
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        inst = [
+            last_parser.OFPInstructionActions(
+                last_ofproto.OFPIT_APPLY_ACTIONS,
+                actions
+            )
+        ]
         
-        mod = parser.OFPFlowMod(
+        mod = last_parser.OFPFlowMod(
             datapath = last_datapath,
             priority = 10,
             match = match,
@@ -431,9 +453,10 @@ class LoadBalancer(app_manager.RyuApp):
             instructions = inst
         )
         last_datapath.send_msg(mod)
-                
+        
         return
 
+        
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
         body = ev.msg.body
