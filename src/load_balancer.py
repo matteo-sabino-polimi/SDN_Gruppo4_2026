@@ -83,7 +83,6 @@ class LoadBalancer(app_manager.RyuApp):
         datapath = ev.msg.datapath # datapath is the id of the switch
         ofproto = datapath.ofproto # all the functions of of
         parser = datapath.ofproto_parser # function to create of messages
-        self.mac_to_port[datapath.id] = {}
         
         # match all packets if empty
         match = parser.OFPMatch()
