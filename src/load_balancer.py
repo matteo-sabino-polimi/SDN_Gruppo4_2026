@@ -27,6 +27,8 @@ from ryu.lib.packet import packet, ethernet, ether_types
 from ryu.lib.packet import arp
 import networkx as nx # library for graphs's algorithms
 
+from math import log1p
+
 # to draw the possible network design
 # import matplotlib.pyplot as plt
 
@@ -43,9 +45,11 @@ class LoadBalancer(app_manager.RyuApp):
 
         # graph of the network
         self.graph = nx.DiGraph()
-        self.port_stats = {}
+        
+        # dictionary of port stats for each datapath
+        self.previous_stats = {}
 
-        # thread that periodically monitor the links
+        # thread that periodically monitors the links
         self.monitor_thread = hub.spawn(self._monitor)
     
     # manage connected switches
@@ -384,8 +388,10 @@ class LoadBalancer(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
         
-
         body = ev.msg.body
+        
+        datapath_id = ev.msg.datapath.id
+        
         self.logger.info('datapath port '
         'rx-pkts rx-bytes rx-error '
         'tx-pkts tx-bytes tx-error')
@@ -394,28 +400,71 @@ class LoadBalancer(app_manager.RyuApp):
         '-------- -------- --------')
         
         for stat in body:
-            self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
-                ev.msg.datapath.id, stat.port_no,
-                stat.rx_packets, stat.rx_bytes, stat.rx_errors,
-                stat.tx_packets, stat.tx_bytes, stat.tx_errors)
             
-            current_tx_bytes = stat.tx_bytes
-            dpid = ev.msg.datapath.id
-            port_no = stat.port_no
-            key = (dpid, port_no)
+            # logging function for statistics
+            self._log_port_statistics(datapath_id, stat)
+            
+            bandwidth_usage = self._compute_bandwidth_usage(
+                datapath_id,
+                stat.port_no,
+                stat.tx_bytes
+                )
+            
+            if bandwidth_usage is not None:
+                self._update_link_weight(
+                    datapath_id,
+                    stat.port_no,
+                    bandwidth_usage
+                )
+            
+        return
 
-            if key in self.port_stats:
-                previous_tx_bytes = self.port_stats[key]
-                bytes_diff = current_tx_bytes - previous_tx_bytes
-                bandwith_usage = bytes_diff / TIME_INTERVAL
-
-                # link updated
-                if dpid in self.graph:
-                    for link in self.graph[dpid]:
-                        if self.graph[dpid][link]['port'] == port_no:
-                            self.graph[dpid][link]['weight'] = 1 + bandwith_usage
-                            self.logger.info(f"link {dpid} -> {link} (port {port_no} updated {bandwith_usage} B/s)")
-                            break
-
-            self.port_stats[key] = current_tx_bytes
+    def _log_port_statistics(self, dpid, stat):
+        self.logger.info('%016x %8x %8d %8d %8d %8d %8d %8d',
+                dpid, stat.port_no,
+                stat.rx_packets, stat.rx_bytes, stat.rx_errors,
+                stat.tx_packets, stat.tx_bytes, stat.tx_errors) 
+        return
+    
+    def _compute_bandwidth_usage(self, dpid, port_no, current_tx_bytes):
+        
+        switch_port_id = (dpid, port_no)
+        
+        previous_tx_bytes = self.previous_stats.get(switch_port_id)
+        
+        # update stored values
+        self.previous_stats[switch_port_id] = current_tx_bytes
+        
+        if previous_tx_bytes is None:
+            return None
+        
+        bytes_diff = current_tx_bytes - previous_tx_bytes
+        
+        if bytes_diff < 0:
+            return None
+        
+        bandwidth_usage = bytes_diff / TIME_INTERVAL
+        
+        return bandwidth_usage
+    
+    def _update_link_weight(self, dpid, port_no, bandwidth_usage):
+        
+        if dpid not in self.graph:
+            return
+        
+        for neighbor_switch in self.graph[dpid]:
+            
+            edge = self.graph[dpid][neighbor_switch]
+            
+            if edge['port'] == port_no:
+                edge['weight'] = 1 + log1p(bandwidth_usage) # logaritmic increase for the weight
+            
+                self.logger.info(
+                    f"link {dpid} --> {neighbor_switch} "
+                    f"(port {port_no}) updated"
+                    f"weight={edge['weight']}"
+                )
+                
+                break # no need to look forward
+            
         return
