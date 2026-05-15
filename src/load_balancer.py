@@ -25,6 +25,7 @@ from ryu.topology import event, switches
 from ryu.topology.api import get_all_switch, get_all_link, get_all_host # import to know the topology of the network
 from ryu.lib.packet import packet, ethernet, ether_types
 from ryu.lib.packet import arp
+from ryu.lib.packet import ipv4, tcp, udp  # L3/L4 protocols
 import networkx as nx # library for graphs's algorithms
 
 # to draw the possible network design
@@ -130,14 +131,14 @@ class LoadBalancer(app_manager.RyuApp):
         datapath.send_msg(req)
 
     # find destination switch and switch port
-    def find_destination_switch(self,destination_mac):
+    def find_destination_switch(self, destination_mac):
         for host in get_all_host(self):
             if host.mac == destination_mac:
                 return (host.port.dpid, host.port.port_no)
-        return (None,None)
+        return (None, None)
 
     # find the next switch to which the package has to be sent
-    def find_next_hop_to_destination(self,source_id,destination_id):
+    def find_next_hop_to_destination(self, source_id, destination_id):
         net = self.graph
         for link in get_all_link(self):
             if not net.has_edge(link.src.dpid, link.dst.dpid):
@@ -151,7 +152,7 @@ class LoadBalancer(app_manager.RyuApp):
             weight='weight'
         )
 
-        first_link = net[ path[0] ][ path[1] ]
+        first_link = net[path[0]][path[1]]
 
         return first_link['port']
     
@@ -175,7 +176,7 @@ class LoadBalancer(app_manager.RyuApp):
 
         # trying to find the host that the message is looking for
         for host in get_all_host(self):
-            if host.ipv4 and arp_in.dst_ip in host.ipv4: # checks if dst_ip is in host.ipv4 only if host.ipv4 is not Non and if is not empty
+            if host.ipv4 and arp_in.dst_ip in host.ipv4: # checks if dst_ip is in host.ipv4 only if host.ipv4 is not None and if is not empty
                 destination_host_mac = host.mac
                 break
 
@@ -245,7 +246,28 @@ class LoadBalancer(app_manager.RyuApp):
         # ignore all non IPv4 packets (es. ARP, LLDP)
         if eth.ethertype != ether_types.ETH_TYPE_IP:
             return
-        
+
+        # --- L3 extraction ---
+        pkt_ipv4 = pkt.get_protocol(ipv4.ipv4)
+        if pkt_ipv4 is None:
+            return
+
+        ip_proto = pkt_ipv4.proto
+
+        # --- L4 extraction ---
+        l4_src_port = None
+        l4_dst_port = None
+
+        pkt_tcp = pkt.get_protocol(tcp.tcp)
+        pkt_udp = pkt.get_protocol(udp.udp)
+
+        if pkt_tcp:
+            l4_src_port = pkt_tcp.src_port
+            l4_dst_port = pkt_tcp.dst_port
+        elif pkt_udp:
+            l4_src_port = pkt_udp.src_port
+            l4_dst_port = pkt_udp.dst_port
+
         destination_mac = eth.dst
 
         # find destination switch
@@ -253,7 +275,6 @@ class LoadBalancer(app_manager.RyuApp):
 
         # host not found
         if dst_dpid is None:
-            # print "DP: ", datapath.id, "Host not found: ", pkt_ip.dst
             return
 
         if dst_dpid == datapath.id:
@@ -261,10 +282,9 @@ class LoadBalancer(app_manager.RyuApp):
             output_port = dst_port    
         else:
             # used if host is not directly connected
-            output_port = self.find_next_hop_to_destination(datapath.id,dst_dpid)
+            output_port = self.find_next_hop_to_destination(datapath.id, dst_dpid)
 
         # 1. the received packet is sent to correct port (I send it manually because if it arrives before the installation of the rule it is sent back to me)
-        
         actions = [parser.OFPActionOutput(output_port)]
 
         out = parser.OFPPacketOut(
@@ -277,12 +297,27 @@ class LoadBalancer(app_manager.RyuApp):
 
         datapath.send_msg(out)
 
-        # 2. add rule for the next packets
-        
-        match = parser.OFPMatch(
+        # 2. add rule for the next packets with full L2 + L3 + L4 match
+
+        # base match fields: L2 (eth_type required to enable IP fields) + L3
+        match_fields = dict(
+            eth_type=ether_types.ETH_TYPE_IP,   # mandatory to use ipv4_* fields
             eth_src=eth.src,
-            eth_dst=destination_mac
-            )
+            eth_dst=destination_mac,
+            ipv4_src=pkt_ipv4.src,
+            ipv4_dst=pkt_ipv4.dst,
+            ip_proto=ip_proto                    # mandatory to use tcp_*/udp_* fields
+        )
+
+        # add L4 fields only when available (ip_proto must match)
+        if pkt_tcp is not None:
+            match_fields['tcp_src'] = l4_src_port
+            match_fields['tcp_dst'] = l4_dst_port
+        elif pkt_udp is not None:
+            match_fields['udp_src'] = l4_src_port
+            match_fields['udp_dst'] = l4_dst_port
+
+        match = parser.OFPMatch(**match_fields)
         
         inst = [
             parser.OFPInstructionActions(
@@ -295,10 +330,10 @@ class LoadBalancer(app_manager.RyuApp):
             datapath=datapath,
             priority=10,
             match=match,
-            idle_timeout = TIME_INTERVAL, # interval of stats report
+            idle_timeout=TIME_INTERVAL, # interval of stats report
             # hard_timeout = TIME_INTERVAL * 2, # hard timout to force rule suppression
             instructions=inst
-            )
+        )
         
         # send the rule to the switch
         datapath.send_msg(mod)
@@ -324,7 +359,6 @@ class LoadBalancer(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
-        
 
         body = ev.msg.body
         self.logger.info('datapath port '
@@ -359,4 +393,3 @@ class LoadBalancer(app_manager.RyuApp):
 
             self.port_stats[key] = current_tx_bytes
         return
-
