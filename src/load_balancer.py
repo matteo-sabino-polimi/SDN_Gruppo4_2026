@@ -564,11 +564,9 @@ class LoadBalancer(app_manager.RyuApp):
         for neighbor_switch in self.graph[dpid]:
             
             edge = self.graph[dpid][neighbor_switch]
-            reverse_edge = self.graph[neighbor_switch][dpid]
             
             if edge['port'] == port_no:
                 edge['weight'] = 1 + bandwidth_usage # EWMA filter already applied, no need to use the log of the value
-                reverse_edge['weight'] = 1 + bandwidth_usage
             
                 self.logger.info(
                     f"link {dpid} --> {neighbor_switch} "
