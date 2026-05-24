@@ -12,17 +12,17 @@ In laboratorio abbiamo utilizzato una topologia reale composta da Switch Open vS
 
 ```mermaid
 graph TD
-    Start((Inizio Test)) --> Ping[1. Discovery: Ping tra RPi4 e RPi5]
+    Start((Inizio Test)) --> Ping["1. Discovery: Ping tra RPi4 e RPi5"]
     
-    Ping --> IperfServer[2. RPi4 (Server):<br/>iperf -s -i 1 -p 9001 &<br/>iperf -s -i 1 -p 9002 &]
+    Ping --> IperfServer["2. RPi4 (Server):<br/>iperf -s -i 1 -p 9001 &<br/>iperf -s -i 1 -p 9002 &"]
     
-    IperfServer --> Client1[3. RPi5 (Client - Flusso 1):<br/>iperf -c 10.10.6.45 -p 9001 -b 10M &]
+    IperfServer --> Client1["3. RPi5 (Client - Flusso 1):<br/>iperf -c 10.10.6.45 -p 9001 -b 10M &"]
     
-    Client1 --> CheckFlow1[4. Verifica Flow Tables:<br/>Il traffico segue lo <i>Shortest Path</i>]
+    Client1 --> CheckFlow1["4. Verifica Flow Tables:<br/>Il traffico segue lo Shortest Path"]
     
-    CheckFlow1 --> Client2[5. RPi5 (Client - Flusso 2):<br/>iperf -c 10.10.6.45 -p 9002 -b 10M &]
+    CheckFlow1 --> Client2["5. RPi5 (Client - Flusso 2):<br/>iperf -c 10.10.6.45 -p 9002 -b 10M &"]
     
-    Client2 --> CheckFlow2[6. Verifica Bilanciamento:<br/>Nuova regola su <i>Percorso Alternativo</i><br/>(Link più libero)]
+    Client2 --> CheckFlow2["6. Verifica Bilanciamento:<br/>Nuova regola su Percorso Alternativo<br/>(Link più libero)"]
     
     CheckFlow2 --> End((Test Concluso))
 
